@@ -37,6 +37,9 @@ RUN ARCH=$(uname -m) && \
 
 ENV PATH="/opt/binaryen/bin:${PATH}"
 
+COPY pipeline/build-wasi-libs.sh /build/repo/pipeline/
+RUN chmod +x /build/repo/pipeline/build-wasi-libs.sh && /build/repo/pipeline/build-wasi-libs.sh
+
 RUN mkdir -p /zeroperl && chmod 777 /zeroperl
 
 
@@ -91,10 +94,12 @@ FROM wasi-perl AS final
 ARG STACK_SIZE=8388608
 ARG INITIAL_MEMORY=33554432
 ARG ASYNCIFY=true
+ARG WASM_OPT_FLAGS=""
 
 ENV STACK_SIZE=${STACK_SIZE} \
     INITIAL_MEMORY=${INITIAL_MEMORY} \
-    ASYNCIFY=${ASYNCIFY}
+    ASYNCIFY=${ASYNCIFY} \
+    WASM_OPT_FLAGS=${WASM_OPT_FLAGS}
 
 COPY stubs/ /build/repo/stubs/
 

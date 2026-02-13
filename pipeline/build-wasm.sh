@@ -10,6 +10,11 @@ ASYNCIFY="${ASYNCIFY:-true}"
 
 export PATH="$REPO_DIR/wasi-bin:$PATH"
 
+# Use fake wasm-opt during compile/link to prevent post-link optimization
+mv /opt/binaryen/bin/wasm-opt /opt/binaryen/bin/wasm-opt-real
+cp "$REPO_DIR/tools/wasm-opt" /opt/binaryen/bin/wasm-opt
+chmod +x /opt/binaryen/bin/wasm-opt
+
 cd "$REPO_DIR/stubs"
 wasic -flto -O3 -c machine.c -o machine.o
 wasic -flto -O3 -c runtime.c -o runtime.o
@@ -58,7 +63,6 @@ wasic \
     -D_WASI_EMULATED_SIGNAL -lwasi-emulated-signal \
     -lwasi-emulated-mman \
     -Wl,--strip-all \
-    -Wl,--allow-undefined \
     zeroperl.o stubs.o zeroperl_data.o \
     -Wl,--whole-archive "$REPO_DIR/stubs/libasyncjmp.a" -Wl,--no-whole-archive \
     -Wl,--whole-archive libperl.a -Wl,--no-whole-archive \
@@ -101,18 +105,36 @@ wasic \
     lib/auto/Opcode/Opcode.a \
     lib/auto/Time/HiRes/HiRes.a \
     $(cat ext.libs) \
+    -lz -lbz2 \
     -lm -lwasi-emulated-signal -lwasi-emulated-getpid \
     -lwasi-emulated-process-clocks -lwasi-emulated-mman \
     -ferror-limit=0
 
+# Restore real wasm-opt for asyncify pass
+mv /opt/binaryen/bin/wasm-opt-real /opt/binaryen/bin/wasm-opt
+
 if [ "$ASYNCIFY" = "true" ]; then
-    wasm-opt zeroperl_reactor.wasm -O3 -g --strip-dwarf --enable-bulk-memory \
+    wasm-opt zeroperl_reactor.wasm -O3 --strip-debug --enable-bulk-memory \
         --enable-nontrapping-float-to-int --asyncify \
         --pass-arg=asyncify-imports@wasi_snapshot_preview1.fd_read,env.call_host_function \
+        ${WASM_OPT_FLAGS} \
         -o zeroperl.wasm
 else
-    wasm-opt zeroperl_reactor.wasm -g --strip-dwarf --enable-bulk-memory \
+    wasm-opt zeroperl_reactor.wasm --strip-debug --enable-bulk-memory \
         --enable-nontrapping-float-to-int --asyncify \
         --pass-arg=asyncify-ignore-imports \
+        ${WASM_OPT_FLAGS} \
         -o zeroperl.wasm
 fi
+
+# Strip empty name section that wamrc cannot parse
+python3 -c "
+import sys
+data = open('zeroperl.wasm', 'rb').read()
+# Custom name section: id=0x00, then LEB size, then 0x04 'name'
+marker = b'\x00\x05\x04name'
+idx = data.rfind(marker)
+if idx > 0 and idx + len(marker) == len(data):
+    open('zeroperl.wasm', 'wb').write(data[:idx])
+    print(f'Stripped {len(marker)}-byte empty name section')
+"
